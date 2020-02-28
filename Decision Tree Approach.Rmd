@@ -1,0 +1,74 @@
+---
+title: "Decision Tree approach"
+output: html_notebook
+---
+```{r}
+library("survival")
+library("ISLR")
+library("tree")
+library("Hmisc")
+library("dplyr")
+```
+```{r}
+df <- ITM2019BootcampDataCleaned
+names(df)[2]<-"time"
+names(df)[3]<-"status"
+```
+```{r}
+df1 = sort(sample(nrow(df), nrow(df)*0.7))
+train_df <- df[df1,]
+5
+test_df <- df[-df1,]
+```
+```{r}
+coxmodel <- coxph(formula=Surv(time, status) ~ .-X1-YearsFromUW, data = train_df)
+```
+```{r}
+pretrain<-predict(coxmodel, train_df, type="risk")
+```
+```{r}
+pretest<-predict(coxmodel, test_df, type="risk")
+test_df$pretest <- pretest
+```
+```{r}
+testFit<-Surv(time=test_df$time,event=test_df$status)
+rcorr.cens(1-test_df$pretest, S=testFit)
+```
+```{r}
+holoutset<-ITM2019BootcampDataHoldoutNoOutcomes
+holoutset$BMI[is.na(holoutset$BMI)]<- 27.19
+```
+```{r}
+spre<-sort(pre, decreasing = FALSE)
+```
+```{r}
+q<-quantile(spre,seq(0,1,0.1))
+```
+```{r}
+train_df<-mutate("prediction"=pre,train_df)
+```
+```{r}
+computeBin <- function(score) {
+for (i in 2:11) {
+if (score <= q[i]) {
+return(i-1)
+}
+}
+}
+```
+```{r}
+bin_no <-c()
+for (i in 1:nrow(train_df)){
+bin_no<-append(bin_no,computeBin(train_df$prediction[i]))
+}
+```
+```{r}
+6
+train_df<-mutate("bin"=bin_no,train_df)
+```
+```{r}
+# We did not manage to fit the tree
+train_df$bin <- as.factor(train_df$bin)
+tree.fit <- tree(formula = bin ~.-X1-YearsFromUW-ExactAge-CertGender-time-status-prediction
+,data=train_df)
+```

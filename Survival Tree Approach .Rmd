@@ -1,0 +1,105 @@
+---
+title: "Survavial Tree Approach"
+output: html_notebook
+---
+```{r setup, include=FALSE}
+library(ggplot2)
+library(tidyverse)
+library(survival)
+library(rpart)
+library(rpart.plot)
+library(partykit)
+library(rms)
+library(dplyr)
+library(infer)
+library(Hmisc)
+library(caret)
+```
+```{r}
+# Input Tree
+# Rank every node based on distance to the root omitting Gender and Age splits
+# Prune those indices with ranking > 5
+computePruneList <- function(frame, pruneLevel=5.0, discountedVariables = c("ExactAge", "CertGender")) tol <- 0.000001
+vertexNumbers <- as.integer(row.names(frame))
+nverts <- length(vertexNumbers)
+newFrame <- frame
+newFrame$vertNums <- vertexNumbers
+newFrame <- newFrame[order(newFrame$vertNums),] # Order by vertex number
+vertexLevels <- rep(0, nverts)
+for (i in 2:nverts) {
+# Check if parent node split on age or gender
+
+vertexNumber <- newFrame$vertNums[i]
+parentNumber <- floor(vertexNumber/2.0)
+parentIndex <- match(parentNumber,newFrame$vertNums)
+discountedSplit <- (newFrame$var[parentIndex] %in% discountedVariables)
+# Update vertex levels
+if (!discountedSplit) {
+vertexLevels[i] <- vertexLevels[parentIndex] + 1
+}
+}
+#return(vertexLevels)
+#outputFrame <- cbind(newFrame$vertNums, vertexLevels)
+return(newFrame$vertNums[vertexLevels > pruneLevel + tol])
+}
+# Compute a vector of 5-year survival probabilities from an input vector of "surv" objects
+computeSurvivalProbs <- function(survivalVector, year=5.0) {
+temp <- rep(0, length(survivalVector))
+for (i in 1:length(survivalVector)) {
+index <- which.min(abs(survivalVector[[i]]$time - year))
+temp[i] <- survivalVector[[i]]$surv[index]
+}
+return(temp)
+}
+```
+```{r}
+df <- read.csv("ITM2019BootcampDataCleaned.csv")
+# Add pairwise questions
+# for (i in 8:ncol(df)) {
+# for (j in 8:ncol(df)) {
+# df <- cbind(df, df[,i] | df[,j])
+# # We could easily check if adding interactions is beneficial
+# }
+# }
+test <- read.csv("ITM2019BootcampDataHoldoutNoOutcomes.csv")
+set.seed(0)
+# Code for allocating an internal test set
+#ntrain <- floor(nrow(df)*0.9)
+#ntest <- nrow(df) - ntrain
+
+#train_ind <- sample(seq_len(nrow(df)), size = ntrain)
+#train <- df[train_ind,]
+#test <- df[-train_ind,]
+train <- df
+```
+```{r}
+# Survival Fit:
+sfit = survfit(Surv(time=Duration, event = died) ~ 1, data=train)
+plot(sfit)
+costVector <- rep(1.0, ncol(df)-4)
+costVector[1] <- 0.9
+costVector[2] <- 0.9 # The default cost value is 1 for all variables
+# Tree Fit:
+tfit = rpart(formula = Surv(time=Duration, event = died) ~ . -X - Duration - died - YearsFromUW, # Prune down to 5 questions, not counting age or gender splits
+tfit.prune <- snip.rpart(tfit, toss = computePruneList(tfit$frame))
+#rpart.plot(tfit.prune, uniform=TRUE, tweak=1.3) # Plot tree after pruning down to 5-questions
+plotcp(tfit.prune)
+# Extract optimum value of regularization parameter
+cpOpt <- tfit.prune$cptable[which.min(tfit.prune$cptable[,4]),1]
+tfit.prune <- prune(tfit.prune, cp=cpOpt)
+# Plot tree after split complexity pruning
+rpart.plot(tfit.prune, uniform=TRUE, tweak=1.3)
+```
+```{r}
+tfit2 <- as.party(tfit.prune)
+# Extract Survival curves
+predCurves <- rpart.predict(tfit2, newdata=test, type = "prob")
+test$predicted5Year <- computeSurvivalProbs(predCurves)
+plot(predCurves[[1]]) # Plot the estimated survival curve for person 1
+#ggplot(test, aes(x=predicted5Year)) + geom_histogram()
+write.csv(test$predicted5Year, file ="test5YearPredictions.csv", row.names=FALSE)
+# Print out c-index on test set
+#testFit <- Surv(time=test$Duration, event = test$died)
+#rcorr.cens(x=test$predicted5Year, S=testFit)
+# 0.73584 on test set
+```
